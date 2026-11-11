@@ -1,0 +1,4 @@
+{"id": "ATTR-003", "customer": "CUST-001", "manager": "M-GAMMA", "effective_start": "2024-05-01", "effective_end": "2024-06-01", "registered_at": "2024-06-15T10:00:00Z"}
+{"id": "ATTR-001", "customer": "CUST-001", "manager": "M-ALPHA", "effective_start": "2024-01-01", "effective_end": "2024-07-01", "registered_at": "2024-01-02T08:00:00Z"}
+{"id": "ATTR-004", "customer": "CUST-001", "manager": "M-DELTA", "effective_start": "2024-06-01", "effective_end": "2024-12-31", "registered_at": "2024-08-01T00:00:00Z"}
+{"id": "ATTR-002", "customer": "CUST-001", "manager": "M-BETA", "effective_start": "2024-04-01", "effective_end": "2024-10-01", "registered_at": "2024-06-15T10:00:00Z"}

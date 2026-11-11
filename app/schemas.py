@@ -35,6 +35,14 @@ def _apply_aliases(data: object, aliases: dict[str, tuple[str, ...]]) -> object:
     if not isinstance(data, dict):
         return data
 
+    # Fast path: nothing to rewrite when no alias is present (canonical exports).
+    if not any(
+        alternative in data
+        for alternatives in aliases.values()
+        for alternative in alternatives
+    ):
+        return data
+
     normalised = dict(data)
     for canonical, alternatives in aliases.items():
         if canonical not in normalised:
@@ -299,3 +307,31 @@ class AnalyzeResponse(BaseModel):
     settlement_points: list[SettlementResult]
     changes: list[SaleChange]
     summary: Summary
+
+
+class BackfillPointResult(BaseModel):
+    """One side (before/after) of a per-sale line in the JSONL file response."""
+
+    status: Status
+    manager: str | None
+    source_record_ids: list[str] = Field(default_factory=list)
+
+
+class BackfillResultLine(BaseModel):
+    """One JSONL line of the large-file analysis attachment.
+
+    Lines are emitted in the original order of the uploaded sales file.
+    """
+
+    sale_id: str
+    before: BackfillPointResult
+    after: BackfillPointResult
+    requires_backfill: bool = Field(
+        description="True when status or manager changed between the two settlement points."
+    )
+    should_reassign: bool = Field(
+        description=(
+            "True when the sale needs backfill and the 'after' point is assigned; "
+            "sales that became pending_verification need manual verification first."
+        )
+    )

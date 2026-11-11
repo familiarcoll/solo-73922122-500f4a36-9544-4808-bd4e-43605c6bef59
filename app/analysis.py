@@ -95,7 +95,7 @@ def _active_at(records: list[AttributionRecord], point: date) -> list[Attributio
     ]
 
 
-def _build_timeline_segments(
+def build_timeline_segments(
     customer: str, records: list[AttributionRecord]
 ) -> list[TimelineSegment]:
     """Build stable, non-overlapping segments from the layered ERP records.
@@ -156,7 +156,7 @@ def _build_timeline_segments(
     return segments
 
 
-def _segment_for_date(
+def segment_for_date(
     segments: list[TimelineSegment], sale_date: date
 ) -> TimelineSegment | None:
     for segment in segments:
@@ -224,7 +224,7 @@ def _compute_settlement_point(
         records_by_customer.setdefault(record.customer, []).append(record)
 
     timelines: dict[str, list[TimelineSegment]] = {
-        customer: _build_timeline_segments(customer, records_by_customer.get(customer, []))
+        customer: build_timeline_segments(customer, records_by_customer.get(customer, []))
         for customer in customers
     }
 
@@ -237,7 +237,7 @@ def _compute_settlement_point(
     sale_results: list[SaleAttribution] = []
     for sale in request.sales:
         customer_segments = timelines.get(sale.customer, [])
-        segment = _segment_for_date(customer_segments, sale.sale_date)
+        segment = segment_for_date(customer_segments, sale.sale_date)
         result = _sale_attribution(sale, settlement_point, segment)
         sale_results.append(result)
 

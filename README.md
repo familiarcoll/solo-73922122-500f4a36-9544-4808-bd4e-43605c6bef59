@@ -6,6 +6,10 @@
 2. 归属经理或“待核实”状态发生变化的销售 ID；
 3. 每个变化销售的前后结果，以及两边的来源记录，供数仓回填事实表。
 
+面向整月 ERP 导出的大文件场景，另提供 `POST /api/v1/backfill/analyze-files`：
+上传两份 gzip 压缩 JSONL，按销售文件原序流式返回 JSONL 附件，服务端借助
+临时 SQLite 处理，**不全量载入内存**（见下文「大文件分析 API」）。
+
 ## 一键启动
 
 ```bash
@@ -16,11 +20,12 @@ docker compose up --build
 
 | 入口 | 地址 |
 | --- | --- |
-| Swagger 交互文档（可直接 Try it out） | http://localhost:8000/docs |
+| Swagger 交互文档（可直接 Try it out，含文件上传入口） | http://localhost:8000/docs |
 | ReDoc | http://localhost:8000/redoc |
 | OpenAPI JSON | http://localhost:8000/openapi.json |
 | 获取可运行的示例请求 | http://localhost:8000/api/v1/backfill/sample-request |
 | 直接执行示例并返回结果 | `POST http://localhost:8000/api/v1/backfill/demo` |
+| 大文件分析（multipart 上传） | `POST http://localhost:8000/api/v1/backfill/analyze-files` |
 | 健康检查 | http://localhost:8000/health |
 
 Swagger 的 `POST /api/v1/backfill/analyze` 请求体已经内置 `retroactive_correction` 示例，点击 **Try it out → Execute** 即可实际调用。端口冲突时可改端口：
@@ -191,6 +196,71 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `pending_to_assigned`：待核实变为已归属；
 - `assigned_to_pending`：已归属变为待核实（冲突或未覆盖）。
 
+## 大文件分析 API
+
+### `POST /api/v1/backfill/analyze-files`
+
+面向数仓工程师处理整月 ERP 导出的场景：multipart 上传两份 **gzip 压缩的
+UTF-8 JSONL** 及两个结算时点，按**销售文件原序**流式返回 JSONL 附件。
+
+表单字段（`/docs` 中可直接选择文件、填写时点并执行）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `attribution_file` | 归属记录文件（`.jsonl.gz`），每行一个 `AttributionRecord`，字段与 JSON 接口一致（含 ERP 别名兼容） |
+| `sales_file` | 销售明细文件（`.jsonl.gz`），每行一个 `Sale` |
+| `settlement_point_before` | 前一个结算时点（ISO-8601；无时区按 UTC） |
+| `settlement_point_after` | 后一个结算时点 |
+
+**输入限制**（超限即整个请求失败）：
+
+- 每文件最多 1,000,000 行；
+- 每行最多 16 KiB（16,384 字节，不含换行符）；
+- 每客户在每文件中最多 1,000 行；
+- ID 在各自文件内全局唯一（销售 ID 与归属记录 ID 分属两个命名空间）；
+- 文件内行序任意（乱序可正常处理）。
+
+**输出**：`application/x-ndjson` 附件（`backfill-results.jsonl`），每行一个
+销售的前后对比，顺序与上传的销售文件完全一致：
+
+```json
+{"sale_id":"SALE-002","before":{"status":"assigned","manager":"M-ALPHA","source_record_ids":["ATTR-001"]},"after":{"status":"assigned","manager":"M-BETA","source_record_ids":["ATTR-002"]},"requires_backfill":true,"should_reassign":true}
+```
+
+响应头附带 `X-Total-Sales`（总行数）与 `X-Requires-Backfill-Sales`（需回填行数）。
+归属判定规则与 JSON 接口完全一致；`requires_backfill` 等价于该销售是否进入
+JSON 接口的 `changes`。
+
+**资源与可靠性保证**：
+
+- 不全量载入输入、ID 集合或结果：上传流逐行解析写入临时 SQLite，ID 唯一性
+  由 SQLite 唯一索引保证，每客户行数上限由 `GROUP BY` 校验，结果写回 SQLite
+  后按 `seq` 流式输出；内存占用不随客户总数增长（每客户最多 1000+1000 行的
+  工作集）。
+- 两份压缩流**完整读完并通过 gzip 尾部校验、全部记录通过校验、全部计算完成**
+  后才返回成功响应；任一步失败（gzip 损坏/截断、非 UTF-8、JSON 语法错误、
+  字段校验失败、ID 重复、行数/行长/客户行数超限）都返回 4xx 错误，不提供
+  部分结果。
+- 上传失败、处理失败、下载完成或客户端断开后，本请求的临时文件都会被清理。
+- 临时目录默认在系统临时目录下，可用环境变量 `BACKFILL_TMP_DIR` 指定。
+
+**乱序样例**（`examples/files/`，数据与内置示例相同但行序打乱）：
+
+```bash
+curl -sS -X POST http://localhost:8000/api/v1/backfill/analyze-files \
+  -F "attribution_file=@examples/files/attribution-records.jsonl.gz" \
+  -F "sales_file=@examples/files/sales-details.jsonl.gz" \
+  -F "settlement_point_before=2024-05-01T00:00:00Z" \
+  -F "settlement_point_after=2024-07-01T00:00:00Z" \
+  -OJ
+
+# 与预期输出对比（应无差异）
+diff backfill-results.jsonl examples/files/expected-results.jsonl
+```
+
+`examples/files/` 下同时保留了未压缩的 `.jsonl` 便于查看，`expected-results.jsonl`
+为上述调用的预期输出（6 行，顺序与 `sales-details.jsonl` 一致）。
+
 ## 示例
 
 下面的示例已包含在 Swagger 中：
@@ -218,18 +288,19 @@ python3 -m pip install -r requirements-dev.txt
 python3 -m pytest -q
 ```
 
-测试覆盖按登记时间截断、局部覆盖、左闭右开边界、同时间冲突、未覆盖、变化分类、输入校验，以及 Swagger 示例和 `/demo` 的实际调用。
+测试覆盖按登记时间截断、局部覆盖、左闭右开边界、同时间冲突、未覆盖、变化分类、输入校验，以及 Swagger 示例和 `/demo` 的实际调用；大文件接口另覆盖乱序输入、与 JSON 接口的随机化差分对比、各类文件/行/客户限额、gzip 尾部校验失败、以及临时文件在成功、失败与客户端断开时的清理。
 
 ## 项目结构
 
 ```text
 app/
-  main.py       # FastAPI 路由、OpenAPI 示例、示例/演示入口
-  schemas.py    # 请求/响应模型与校验
-  analysis.py   # 归属分层、分段、时点对比
-  sample.py     # 内置示例
-tests/          # 单元测试与 API 测试
-examples/       # 可直接 curl 的示例请求
+  main.py           # FastAPI 路由、OpenAPI 示例、示例/演示/大文件入口
+  schemas.py        # 请求/响应模型与校验
+  analysis.py       # 归属分层、分段、时点对比（两个接口共用）
+  file_analysis.py  # 大文件流式摄取、临时 SQLite、逐客户计算、流式输出
+  sample.py         # 内置示例
+tests/              # 单元测试、API 测试与大文件接口测试
+examples/           # 可直接 curl 的示例请求与乱序 gzip 样例
 Dockerfile
 docker-compose.yml
 ```
