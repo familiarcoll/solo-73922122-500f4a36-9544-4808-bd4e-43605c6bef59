@@ -1,0 +1,21 @@
+services:
+  backfill-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sales-attribution-backfill:local
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
